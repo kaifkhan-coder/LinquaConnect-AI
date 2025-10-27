@@ -1,0 +1,7 @@
+{
+  "name": "LinguaConnect AI",
+  "description": "A language learning app that provides a real-time AI conversational partner for practice, powered by the Gemini Live API. Practice speaking and get instant feedback.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
