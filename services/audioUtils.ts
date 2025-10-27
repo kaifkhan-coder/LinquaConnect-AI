@@ -1,4 +1,6 @@
 
+import { Blob } from '@google/genai';
+
 // Base64 encoding function
 export function encode(bytes: Uint8Array): string {
   let binary = '';
@@ -38,4 +40,17 @@ export async function decodeAudioData(
     }
   }
   return buffer;
+}
+
+// Creates a Blob object for the Gemini API from raw audio data
+export function createBlob(data: Float32Array): Blob {
+  const l = data.length;
+  const int16 = new Int16Array(l);
+  for (let i = 0; i < l; i++) {
+    int16[i] = data[i] * 32768;
+  }
+  return {
+    data: encode(new Uint8Array(int16.buffer)),
+    mimeType: 'audio/pcm;rate=16000',
+  };
 }

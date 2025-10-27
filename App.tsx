@@ -4,7 +4,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality, Blob } from '@google/genai';
 import { AppStatus, LanguageOption, TranscriptMessage } from './types';
 import { LANGUAGES } from './constants';
-import { encode, decode, decodeAudioData } from './services/audioUtils';
+import { decode, decodeAudioData, createBlob } from './services/audioUtils';
 
 import LanguageSelector from './components/LanguageSelector';
 import ConversationView from './components/ConversationView';
@@ -20,6 +20,7 @@ interface LiveSession {
 const App: React.FC = () => {
   const [appStatus, setAppStatus] = useState<AppStatus>(AppStatus.IDLE);
   const [transcript, setTranscript] = useState<TranscriptMessage[]>([]);
+  const [streamingMessage, setStreamingMessage] = useState<TranscriptMessage | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState<LanguageOption>(LANGUAGES[0]);
 
   const sessionPromiseRef = useRef<Promise<LiveSession> | null>(null);
@@ -31,9 +32,6 @@ const App: React.FC = () => {
   
   const nextStartTimeRef = useRef<number>(0);
   const audioSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-
-  const currentInputTranscriptionRef = useRef('');
-  const currentOutputTranscriptionRef = useRef('');
 
   const stopConversation = useCallback(() => {
     if (sessionPromiseRef.current) {
@@ -67,6 +65,7 @@ const App: React.FC = () => {
   const startConversation = useCallback(async () => {
     setAppStatus(AppStatus.CONNECTING);
     setTranscript([]);
+    setStreamingMessage(null);
 
     try {
       streamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -94,10 +93,7 @@ const App: React.FC = () => {
               
               scriptProcessorRef.current.onaudioprocess = (audioProcessingEvent) => {
                 const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
-                const pcmBlob: Blob = {
-                  data: encode(new Uint8Array(new Int16Array(inputData.map(f => f * 32768)).buffer)),
-                  mimeType: 'audio/pcm;rate=16000',
-                };
+                const pcmBlob = createBlob(inputData);
                 if (sessionPromiseRef.current) {
                     sessionPromiseRef.current.then((session) => {
                         session.sendRealtimeInput({ media: pcmBlob });
@@ -111,25 +107,33 @@ const App: React.FC = () => {
             }
           },
           onmessage: async (message: LiveServerMessage) => {
-            if (message.serverContent?.outputTranscription) {
-                currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text;
-            }
             if (message.serverContent?.inputTranscription) {
-                currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text;
-            }
-            if (message.serverContent?.turnComplete) {
-                const userInput = currentInputTranscriptionRef.current.trim();
-                const aiResponse = currentOutputTranscriptionRef.current.trim();
-                
-                setTranscript(prev => {
-                    const newTranscript = [...prev];
-                    if (userInput) newTranscript.push({ speaker: 'user', text: userInput });
-                    if (aiResponse) newTranscript.push({ speaker: 'ai', text: aiResponse });
-                    return newTranscript;
-                });
-
-                currentInputTranscriptionRef.current = '';
-                currentOutputTranscriptionRef.current = '';
+              const text = message.serverContent.inputTranscription.text;
+              setStreamingMessage(prev => {
+                if (prev?.speaker === 'user') {
+                  return { speaker: 'user', text: prev.text + text };
+                }
+                return { speaker: 'user', text };
+              });
+            } else if (message.serverContent?.outputTranscription) {
+              const text = message.serverContent.outputTranscription.text;
+              setStreamingMessage(prev => {
+                if (prev?.speaker === 'user') {
+                  setTranscript(t => [...t, prev]);
+                  return { speaker: 'ai', text: text };
+                }
+                if (prev?.speaker === 'ai') {
+                  return { speaker: 'ai', text: prev.text + text };
+                }
+                return { speaker: 'ai', text: text };
+              });
+            } else if (message.serverContent?.turnComplete) {
+              setStreamingMessage(prev => {
+                if (prev) {
+                  setTranscript(t => [...t, prev]);
+                }
+                return null;
+              });
             }
 
             const base64Audio = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
@@ -182,6 +186,8 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const allMessages = streamingMessage ? [...transcript, streamingMessage] : transcript;
+
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-4 font-sans">
       <div className="w-full max-w-4xl mx-auto flex flex-col items-center">
@@ -193,7 +199,7 @@ const App: React.FC = () => {
         </header>
 
         <div className="w-full h-[50vh] md:h-[60vh] bg-slate-900 rounded-2xl shadow-2xl shadow-black/20 p-4 border border-slate-700/50 mb-6">
-            <ConversationView messages={transcript} />
+            <ConversationView messages={allMessages} />
         </div>
 
         <div className="w-full flex flex-col md:flex-row items-center justify-between gap-6">
